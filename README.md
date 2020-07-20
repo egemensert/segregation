@@ -112,7 +112,7 @@ class MySimulation(Environment):
   ```
 3. Run the simulation using the ```play``` function.
 4. Analyze the simulation using the simulation save crystal.npy.gz. The crystal is a four dimensional tensor of the simulation where the
-dimensions are as following: (ITERATION_INDEX, HORIZONTAL_LOCATION, VERTICAL_LOCATION, CHANNEL). For example the slice
+dimensions are as following: (ITERATION_INDEX, HORIZONTAL_LOCATION, VERTICAL_LOCATION, CHANNEL). CHANNEL = {0: agent type, 1: agent age, 2: agent id}. For example the slice
 ```slice = crystal[0, 5, 5, :]``` gives the type, age and id of the agent at location (5,5) in the first iteration. If the location is not
 occupied by any agent, then the slice is a zero vector.
 
