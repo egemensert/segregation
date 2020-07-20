@@ -113,7 +113,7 @@ class MySimulation(Environment):
 3. Run the simulation using the ```play``` function.
 
 # Running an Example: "schelling_experiment.py"
-The following shell command runs a Schelling simulation named "my_experiment" with the parameters
+The following shell command runs a Schelling simulation named "my_experiment" with the parameters:
 - Agent Range: 5
 - Interdependence Reward: 75
 - Max Age: 100
