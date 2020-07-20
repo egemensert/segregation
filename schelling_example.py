@@ -1,21 +1,25 @@
  #!/usr/bin/env python -W ignore::DeprecationWarning
 
-from environment import *
+from environment import Environment
 
 from itertools import count
 from multiprocessing import Process, Lock
 
-import warnings
 import time
+import random
 import os, sys
+import warnings
 warnings.filterwarnings("ignore", category=DeprecationWarning)
+
+import torch
+import numpy as np
 
 class Schelling(Environment):
     def __init__(self, size, p_hunter = 0.05, p_prey = 0,
             prey_reward = 1, stuck_penalty = 1,
             death_penalty = 1, p_resurrection = 0.2,
             agent_max_age = 100, agent_range = 2, num_actions = 5,
-            same = True, lock = None, details_csv = "details.csv",
+            same = True, lock = None,
             max_iteration = 5000, name = None, eating_bonus = 1,
             alpha=1., beta=1., gamma = 1.):
 
@@ -23,21 +27,13 @@ class Schelling(Environment):
                 prey_reward = prey_reward, stuck_penalty = stuck_penalty,
                 death_penalty = death_penalty, p_resurrection = p_resurrection,
                 agent_max_age = agent_max_age, agent_range = agent_range, num_actions = num_actions,
-                same = same, lock = lock, name = name, details_csv = details_csv, max_iteration = max_iteration)
+                same = same, lock = lock, name = name, max_iteration = max_iteration)
+
         self.eating_bonus = prey_reward
-        self.details_csv = details_csv
 
         self.alpha = alpha
         self.beta = beta
         self.gamma = gamma
-
-        #self.p_resurrection = 1.
-        if lock:
-            lock.acquire()
-            with open(details_csv, "a") as f:
-                f.write(", ".join(map(str, [self.name] + self.args + [self.eating_bonus])) + '\n')
-            lock.release()
-
         self.alive_reward = 0.1
 
     def default(self, agent):
@@ -61,7 +57,6 @@ class Schelling(Environment):
 
     def on_obstacle(self, agent):
         return -10*self.alive_reward
-
     def on_same(self, agent, other):
         return -10*self.alive_reward
 
@@ -91,7 +86,6 @@ def play(map, episodes, iterations, eps=1e-6):
     directions = [(-1, 0), (0, -1), (1, 0), (0, 1), (0, 0)]
     times = 0
     for episode in range(episodes):
-        #map.shuffle()
         c = 0
         for t in count():
             t_start = time.time()
@@ -117,10 +111,6 @@ def play(map, episodes, iterations, eps=1e-6):
             map.record(rews)
 
             next_state = map.get_map()
-            """
-            print('I:%.4d | A: %.2f, B: %.2f' %
-             (t, rews["A"] / (counts["A"] + eps), rews["B"] / (counts["B"] + eps)))
-            """
 
             time_elapsed = time.time() - t_start
             times += time_elapsed
@@ -134,12 +124,9 @@ def play(map, episodes, iterations, eps=1e-6):
 
             state = next_state
         map.save(episode)
-    #map.save_agents()
-    map.dump()
-    print("DONE.")
+    print("SIMULATION IS FINISHED.")
 
 if __name__ == '__main__':
-    print(sys.argv)
     [_, name, iterations, agent_range, prey_reward, max_age, alpha, beta, gamma] = sys.argv
 
     # alpha is for schelling reward

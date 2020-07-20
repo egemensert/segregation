@@ -13,358 +13,20 @@ import torch.optim as optim
 import torch.nn.functional as F
 import torch.multiprocessing as mp
 
-
 from multiprocessing import Queue, Lock
-
-import matplotlib as mpl
-import matplotlib.pyplot as plt
 
 import warnings
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-
-#seed = 1
-#[f(seed) for f in [random.seed, np.random.seed, torch.manual_seed]]
-
-
-def kl_div(p, q):
-    return np.sum(p * np.log(p / (q + 1e-6) + 1e-6))
-
-
-class ReplayMemory(object):
-    def __init__(self, capacity):
-        self.capacity = capacity
-        self.memory = []
-        self.position = 0
-
-    def push(self, transition):
-        if len(self.memory) < self.capacity:
-            self.memory.append(None)
-        self.memory[self.position] = transition
-        self.position = (self.position + 1) % self.capacity
-
-    def sample(self, batch_size):
-        return random.sample(self.memory, batch_size)
-
-    def __len__(self):
-        return len(self.memory)
-
-class DQN(nn.Module):
-    hidden = 16
-    def __init__(self, num_features, num_actions):
-        super(DQN, self).__init__()
-        self.l1 = nn.Conv2d(1, self.hidden, 3) # 3
-        self.l2 = nn.Conv2d(self.hidden, self.hidden, 3) # 5
-        self.l3 = nn.Conv2d(self.hidden, self.hidden, 3) # 7
-        self.l4 = nn.Conv2d(self.hidden, self.hidden, 3) # 9
-        self.l5 = nn.Conv2d(self.hidden, self.hidden, 3) # 11
-        self.out = nn.Linear(self.hidden + 1, num_actions)
-        for m in self.modules():
-            if isinstance(m, nn.Linear):
-                nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
-
-
-    def forward(self, x, age, relu=False):
-        """
-        x = F.relu(self.l1(x))
-        r = self.l2(x)
-        return F.relu(r) if relu else r
-        """
-        [N, a, b, c] = x.size()
-        x = F.relu(self.l5(F.relu(self.l4(F.relu(self.l3(F.relu(self.l2(F.relu(self.l1(x))))))))))
-        x = x.mean(-1).mean(-1)
-        x = torch.cat([x, age], dim=1)
-        out = self.out(x)
-        return F.relu(out) if relu else out
-
-class Mind:
-    BATCH_SIZE = 256
-    GAMMA = 0.98
-    EPS_START = 0.9999
-    EPS_END = 0
-    EPS_DECAY = 100000
-    #EPS_DECAY = 100
-    TAU = 0.05
-
-    def __init__(self, input_size, num_actions, lock, queue, destination = None, memory_length=1000000):
-        self.network = DQN(input_size, num_actions)
-        self.target_network = DQN(input_size, num_actions)
-        self.lock = lock
-        self.queue = queue
-        self.losses = []
-        self.network.share_memory()
-        self.target_network.share_memory()
-
-        self.input_size, self.num_actions = input_size, num_actions
-
-
-        self.memory = ReplayMemory(memory_length)
-        self.optimizer = optim.Adam(self.network.parameters(), 0.001)
-        self.steps_done = 0
-        self.num_actions = num_actions
-
-        self.target_network.load_state_dict(self.network.state_dict())
-        self.input_size = input_size
-        self.num_cpu = mp.cpu_count() // 2
-
-    def save(self, name, type):
-        #torch.save(self.network.state_dict(), "%s/%s_network.pth" % (name, type))
-        #torch.save(self.target_network.state_dict(), "%s/%s_target_network.pth" % (name, type))
-        #torch.save(self.optimizer.state_dict(), "%s/%s_optimizer.pth" % (name, type))
-
-        #states, ages, actions, next_states, rewards, dones = zip(*self.memory.memory)
-
-        """
-        np.save("%s/%s_states.npy" % (name, type), states)
-        np.save("%s/%s_ages.npy" % (name, type), ages)
-        np.save("%s/%s_actions.npy" % (name, type), actions)
-        np.save("%s/%s_next_states.npy" % (name, type), next_states)
-        np.save("%s/%s_rewards.npy" % (name, type), rewards)
-        np.save("%s/%s_dones.npy" % (name, type), dones)
-
-        np.save("%s/%s_memory_pos.npy" % (name, type), np.array([self.memory.position]))
-        """
-        #np.save("%s/%s_loss.npy" % (name, type), np.array(self.losses))
-        pass
-
-    def load(self, name, type, iter):
-        self.network.load_state_dict(torch.load("%s/%s_network.pth" % (name, type)))
-        self.target_network.load_state_dict(torch.load("%s/%s_target_network.pth" % (name, type)))
-        self.optimizer.load_state_dict(torch.load("%s/%s_optimizer.pth" % (name, type)))
-
-        self.losses = list(np.load("%s/%s_loss.npy" % (name, type)))
-        states = np.load("%s/%s_states.npy" % (name, type))
-        ages = np.load("%s/%s_ages.npy" % (name, type))
-        actions = np.load("%s/%s_actions.npy" % (name, type))
-        next_states = np.load("%s/%s_next_states.npy" % (name, type))
-        rewards = np.load("%s/%s_rewards.npy" % (name, type))
-        dones = np.load("%s/%s_dones.npy" % (name, type))
-
-        self.memory.memory = list(zip(states, ages, actions, next_states, rewards, dones))
-
-        self.memory.position = int(np.load("%s/%s_memory_pos.npy" % (name, type))[0])
-        self.steps_done = iter
-
-    def get_input_size(self):
-        return self.input_size
-
-    def get_output_size(self):
-        return self.num_actions
-
-    def get_losses(self):
-        return self.losses
-
-    def decide(self, state, age, type):
-        sample = random.random()
-        eps_threshold = self.EPS_END + (self.EPS_START - self.EPS_END) * \
-            math.exp(-1. * self.steps_done / self.EPS_DECAY)
-        self.steps_done += 1
-        if sample > eps_threshold:
-            with torch.no_grad():
-                state = torch.FloatTensor([[state]], device=device)
-                age = torch.FloatTensor([[age]], device=device)
-                q_values = self.network(type * state, age)
-                return q_values.max(1)[1].view(1, 1).detach().item()
-        else:
-            rand = [[random.randrange(self.num_actions)]]
-            return torch.tensor(rand, device=device, dtype=torch.long).detach().item()
-
-    def remember(self, vals):
-        self.memory.push(vals)
-
-    def copy(self):
-        net = DQN(self.input_size, self.num_actions)
-        target_net = DQN(self.input_size, self.num_actions)
-        optimizer = optim.Adam(net.parameters(), 0.001)
-        optimizer.load_state_dict(self.optimizer.state_dict())
-        net.load_state_dict(self.network.state_dict())
-        target_net.load_state_dict(self.target_network.state_dict())
-
-        return net, target_net, optimizer
-
-    def opt(self, data, lock, queue, type):
-        """
-        lock.acquire()
-        net, target_net, opt = self.copy()
-        lock.release()
-        """
-
-        batch_state, batch_age, batch_action, batch_next_state, batch_done, expected_q_values = data
-        current_q_values = self.network(type * batch_state, batch_age).gather(1, batch_action)
-        max_next_q_values = self.target_network(type * batch_next_state, batch_age).detach().max(1)[0]
-
-        for i, done in enumerate(batch_done):
-            if not done:
-                expected_q_values[i] += (self.GAMMA * max_next_q_values[i])
-
-        loss = F.mse_loss(current_q_values, expected_q_values.unsqueeze(1))
-        self.optimizer.zero_grad()
-        loss.backward()
-        for param in self.network.parameters():
-            param.grad.data.clamp_(-1, 1)
-
-        self.optimizer.step()
-
-        queue.put(loss.item())
-        """
-        lock.acquire()
-
-        self.losses.append(loss.item())
-        for target_param, param in zip(self.network.parameters(), net.parameters()):
-            target_param.data.copy_(param.data)
-
-        self.optimizer.load_state_dict(opt.state_dict())
-        """
-        for target_param, param in zip(self.target_network.parameters(), self.network.parameters()):
-            target_param.data.copy_(self.TAU * param.data + target_param.data * (1.0 - self.TAU))
-
-        # lock.release()
-
-    def get_data(self):
-        transitions = self.memory.sample(self.BATCH_SIZE)
-        batch_state, batch_age, batch_action, batch_next_state, batch_reward, batch_done = zip(*transitions)
-        batch_state = torch.cat([torch.FloatTensor(s) for s in batch_state])
-        batch_age = torch.cat([torch.FloatTensor(s) for s in batch_age]).view((self.BATCH_SIZE, 1))
-        batch_action = torch.cat([torch.LongTensor(s) for s in batch_action]).view((self.BATCH_SIZE, 1))
-        batch_reward = torch.cat([torch.FloatTensor(s) for s in batch_reward])
-        batch_next_state = torch.cat([torch.FloatTensor(s) for s in batch_next_state])
-
-        expected_q_values = batch_reward
-
-
-
-        return (batch_state, batch_age, batch_action, batch_next_state, batch_done, expected_q_values)
-
-
-    def train(self, type):
-        if len(self.memory) < self.BATCH_SIZE:
-            return 1
-        processes = []
-        for rank in range(self.num_cpu):
-            data = self.get_data()
-            p = mp.Process(target=self.opt, args=(data, self.lock, self.queue, type))
-            p.start()
-            processes.append(p)
-        for p in processes:
-            loss = self.queue.get() # will block
-            self.losses.append(loss)
-        for p in processes:
-            p.join()
-
-        return 0
-
-
-class Agent:
-    def __init__(self, id, loc, type, mind, p, max_time):
-        self.id = id
-        self.alive = True
-        self.loc = loc
-        self.type = type
-        self.current_state = None
-        self.action = None
-        self.next_state = None
-        self.p_void = p
-        self.mind = mind
-        self.input_size = mind.get_input_size()
-        self.output_size = mind.get_output_size()
-        self.age = 0
-        self.max_time = max_time
-        self.time_remaining = max_time
-        self.decision = None
-
-    def update(self, reward, done):
-        assert self.action != None, 'No Action'
-        assert reward != None, 'No Reward'
-        self.mind.remember([[[self.current_state]], [self.get_time_remaining() / self.max_time], [self.action], [[self.next_state]], [reward], [done]])
-
-        #loss = self.mind.train()
-
-        self.action = None
-        if not done:
-            self.current_state, self.next_state = self.next_state, None
-        else:
-            self.current_state, self.next_state = None, None
-
-    def get_losses(self):
-        return self.mind.get_losses()
-
-    def decide(self, state):
-        self.action = self.mind.decide(state, self.get_time_remaining() / self.max_time, self.get_type())
-        self.age += 1
-        self.time_remaining -= 1
-        return self.action
-
-    def get_state(self):
-        return self.current_state
-
-    def get_age(self):
-        return self.age
-
-    def get_time_remaining(self):
-        return self.time_remaining
-
-    def get_id(self):
-        return self.id
-
-    def get_loc(self):
-        return self.loc
-
-    def get_type(self):
-        return self.type
-
-    def get_decision(self):
-        assert self.decision != None, "Decision is requested without setting."
-        return self.decision
-
-    def set_decision(self, decision):
-        self.decision = decision
-
-    def clear_decision(self):
-        self.decision = None
-
-    def set_loc(self, loc):
-        self.loc = loc
-
-    def set_current_state(self, state):
-        self.current_state = state
-
-    def set_next_state(self, state):
-        self.next_state = state
-
-    def eat(self, eating_benefit):
-        self.time_remaining += 1 + eating_benefit
-
-    def reset(self):
-        self.time_remaining = self.max_time
-        self.age = 0
-
-    def die(self, state, rew, manual=False):
-        self.alive = False
-        if not self.action:
-            self.action = np.random.choice(np.arange(self.mind.num_actions))
-        if not manual:
-            self.next_state = state
-            self.update(rew, True)
-        self.set_loc(None)
-        self.reset()
-
-    def is_alive(self):
-        return self.alive
-
-    def respawn(self, loc):
-        self.alive = True
-        self.clear_decision()
-        self.set_loc(loc)
-        #self.current_state = state
+from agent import Agent
+from mind import Mind
 
 class Environment:
     def __init__(self, size, p_hunter, p_prey,
             prey_reward = 1, stuck_penalty = 1,
             death_penalty = 1, p_resurrection = 0.2,
             agent_max_age = 10, agent_range = 2, num_actions = 5,
-            same = True, lock = None, name=None, details_csv = "details.csv",
+            same = True, lock = None, name=None,
             max_iteration = 5000, boundary=False):
         (H, W) = self.size = size
         input_size = (2*agent_range + 1) ** 2
@@ -376,14 +38,12 @@ class Environment:
 
         self.A_mind = Mind(input_size, num_actions, self.lock, Queue())
         self.B_mind = Mind(input_size, num_actions, self.lock, Queue())
-        #self.P_mind = Mind(input_size, num_actions, self.lock, Queue())
 
         self.max_iteration = max_iteration
         self.lock = lock
         if same:
             weights = self.A_mind.network.state_dict()
             self.B_mind.network.load_state_dict(weights)
-            #self.P_mind.network.load_state_dict(weights)
 
 
         self.p_prey = p_prey
@@ -423,50 +83,14 @@ class Environment:
 
         if not os.path.isdir(str(self.name)):
             os.mkdir(str(self.name))
+            os.mkdir(str(self.name)+'/episodes')
             self.map, self.agents, self.loc_to_agent, self.id_to_agent = self._generate_map()
             self._set_initial_states()
             self.mask = self._get_mask()
             self.crystal = np.zeros((max_iteration, H, W, 4)) # type, age, tr,  id
             self.iteration = 0
         else:
-
-            deads = np.load("%s/deads.npy" % self.name)
-            prev_crystal = np.load("%s/crystal.npy" % self.name)
-            self.iteration = len(prev_crystal)
-            self.A_mind.load(self.name, "A", self.iteration)
-            self.B_mind.load(self.name, "B", self.iteration)
-            self.crystal = np.zeros((len(prev_crystal) + max_iteration, H, W, 4))
-            self.crystal[:len(prev_crystal)] = prev_crystal
-            self.map = prev_crystal[-1, :, :, 0]
-            self.agents = []
-            self.loc_to_agent = {}
-            self.id_to_agent = {}
-            for i, row in enumerate(self.map):
-                for j, val in enumerate(row):
-                    if not val == self.names_to_vals["free"]:
-                        if val == self.names_to_vals["A"]:
-                            mind = self.A_mind
-                        elif val == self.names_to_vals["B"]:
-                            mind = self.B_mind
-                        elif val == self.names_to_vals["prey"]:
-                            mind = self.P_mind
-                        idx = prev_crystal[-1, i, j, 3]
-                        agent = Agent(idx, (i, j), val, mind,  self.probs[1], self.agent_max_age)
-                        agent.age = prev_crystal[-1, i, j, 1]
-                        agent.time_remaining = prev_crystal[-1, i, j, 2]
-                        self.loc_to_agent[(i, j)] = agent
-                        self.id_to_agent[idx] = agent
-                        self.agents.append(agent)
-
-            self._set_initial_states()
-            for dead in deads:
-                if dead[0] == self.names_to_vals["A"]:
-                    mind = self.A_mind
-                elif dead[0] == self.names_to_vals["B"]:
-                    mind = self.B_mind
-                agent = Agent(dead[1], (-1, -1), dead[0], mind, self.probs[1], self.agent_max_age)
-                agent.die([], 0, manual=True)
-                self.agents.append(agent)
+            assert False, "There exists an experiment with this name."
 
     def configure(self, prey, penalty, age):
         self.prey_reward = prey
@@ -579,13 +203,6 @@ class Environment:
         agent.update(rew, done)
         return rew
 
-    def dump(self):
-        with open(self.details_csv+"_agents", "w") as f:
-            f.write("id, type, vals\n")
-            for k, vs in self.id_to_lives.items():
-                typ = self.id_to_type[k]
-                f.write("%s, %s, %s\n" % (k, typ, " ".join(map(str, vs))))
-
     def update(self):
         self.iteration += 1
         self.history.append(self.map.copy())
@@ -626,17 +243,17 @@ class Environment:
         a_ids = " ".join(a_ids)
         b_ids = " ".join(b_ids)
 
-        with open("episodes/%s_a_age.csv" % self.name, "a") as f:
+        with open("%s/episodes/a_age.csv" % self.name, "a") as f:
             f.write("%s, %s, %s\n" % (self.iteration, a_ages, a_ids))
 
-        with open("episodes/%s_b_age.csv" % self.name, "a") as f:
+        with open("%s/episodes/b_age.csv" % self.name, "a") as f:
             f.write("%s, %s, %s\n" % (self.iteration, b_ages, b_ids))
 
         if self.iteration == self.max_iteration - 1:
             A_losses = self.A_mind.get_losses()
             B_losses = self.B_mind.get_losses()
-            np.save("episodes/%s_a_loss.npy" % self.name, np.array(A_losses))
-            np.save("episodes/%s_b_loss.npy" % self.name, np.array(B_losses))
+            np.save("%s/episodes/a_loss.npy" % self.name, np.array(A_losses))
+            np.save("%s/episodes/b_loss.npy" % self.name, np.array(B_losses))
 
     def shuffle(self):
         map = np.zeros(self.size)
@@ -664,18 +281,9 @@ class Environment:
         self.records.append(rews)
 
     def save(self, episode):
-        history = np.array(self.history)
-        id_track = np.array(self.id_track)
-        #np.save("episodes/%s_%s.npy" % (episode, self.name) , history)
-        #np.save("episodes/%s_%s_ids.npy" % (episode, self.name) , id_track)
-
-        #self._to_csv(episode)
-        #self.A_mind.save(self.name, "A")
-        #self.B_mind.save(self.name, "B")
         f = gzip.GzipFile('%s/crystal.npy.gz' % self.name, "w")
         np.save(f, self.crystal)
         f.close()
-        #np.save("%s/deads.npy" % self.name, np.array(self.deads))
 
     def save_agents(self):
         self.lock.acquire()
