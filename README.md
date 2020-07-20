@@ -111,6 +111,10 @@ class MySimulation(Environment):
     pass
   ```
 3. Run the simulation using the ```play``` function.
+4. Analyze the simulation using the simulation save crystal.npy.gz. The crystal is a four dimensional tensor of the simulation where the
+dimensions are as following: (ITERATION_INDEX, HORIZONTAL_LOCATION, VERTICAL_LOCATION, CHANNEL). For example the slice
+```slice = crystal[0, 5, 5, :]``` gives the type, age and id of the agent at location (5,5) in the first iteration. If the location is not
+occupied by any agent, then the slice is a zero vector.
 
 # Running an Example: "schelling_experiment.py"
 The following shell command runs a Schelling simulation named "my_experiment" with the parameters:
