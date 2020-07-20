@@ -9,6 +9,8 @@ Life is complex and simulations are helpful in exploring spacee of possibilities
 we invite social scientists, policy makers and engineers to play with our code and enrich our know-how on how things work under
 complex settings.
 
+![An overview of our framework](https://media.springernature.com/full/springer-static/image/art%3A10.1038%2Fs41598-020-68447-8/MediaObjects/41598_2020_68447_Fig1_HTML.png)
+
 # Our Framework
 
 In our code we have three main classes: Mind, Agent and Environment. 
